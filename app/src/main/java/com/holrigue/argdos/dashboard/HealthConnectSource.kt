@@ -36,6 +36,15 @@ class HealthConnectSource(private val context: Context) {
         HealthPermission.getReadPermission(SleepSessionRecord::class),
     )
 
+    // Extra permission the background auto-sync worker needs on Android 14+ to
+    // read while the app is not in the foreground. Requested alongside the reads
+    // when the user turns auto-sync on. Used as a raw string so it works whatever
+    // the Health Connect client version exposes as a constant.
+    val backgroundPermission: String = "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
+
+    /** The read permissions plus the background one, for the auto-sync request. */
+    val permissionsWithBackground: Set<String> = permissions + backgroundPermission
+
     fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context)
 
     fun isAvailable(): Boolean = sdkStatus() == HealthConnectClient.SDK_AVAILABLE

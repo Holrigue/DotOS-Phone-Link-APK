@@ -20,8 +20,19 @@ Gadgetbridge publishes them) and sends them to the watch:
   sleep session's duration and its deep/REM share (see `HealthConnectSource`).
 - **Stress** - left out; Health Connect has no stress type.
 
-Sending is still manual ("Sync from Health Connect" button) in this version;
-automatic background sync is next.
+**V1.2: background auto-sync.** A toggle enables a periodic background job
+(WorkManager) that reads Health Connect and pushes to the watch on its own -
+no need to open the app each time.
+
+- It reconnects to the watch by the address saved on your first manual connect
+  (so **connect once** before enabling), by direct address, with no BLE scan.
+- Interval is selectable (15 / 30 / 60 min; 15 is WorkManager's floor).
+- On Android 14+ it also requests **background** Health Connect access
+  (`READ_HEALTH_DATA_IN_BACKGROUND`) so the worker can read while the app is
+  closed. The manual "Sync from Health Connect" button still works as before.
+
+The schedule survives reboots (WorkManager persists it). Runs may be deferred a
+little by Android's Doze batching, which is fine for health metrics.
 
 ### Phone setup for Health Connect
 

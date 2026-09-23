@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.health.READ_STEPS" />
     <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <!-- Android 14+: read Health Connect from the background auto-sync worker. -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
 
     <!-- Android 13: needed to see the Health Connect provider package. -->
     <queries>

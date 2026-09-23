@@ -153,6 +153,9 @@ class BleClient(private val context: Context) {
                 return
             }
             writeChar = ch
+            // Remember this watch so the background auto-sync can reconnect to it
+            // by address without scanning.
+            try { Prefs.setWatchAddress(context, g.device.address) } catch (_: Exception) {}
             post { listener?.onStatus("Ready - health characteristic found", true) }
         }
 

@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -68,17 +69,32 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    // Separate launcher for the auto-sync (background) grant: it only re-applies
+    // the schedule and never kicks off a foreground write.
+    private val hcBackgroundLauncher =
+        registerForActivityResult(PermissionController.createRequestPermissionResultContract()) { granted ->
+            val bg = granted.contains(hc.backgroundPermission)
+            ui.status = if (bg) "Auto-sync ready (background access granted)"
+                        else "Auto-sync on - grant background access for it to run while closed"
+            SyncScheduler.apply(this)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ble = BleClient(this)
         hc = HealthConnectSource(this)
         ui.hcAvailable = hc.isAvailable()
+        ui.autoSyncOn = Prefs.autoSyncEnabled(this)
+        ui.intervalMin = Prefs.intervalMinutes(this)
+        ui.hasWatchAddr = Prefs.watchAddress(this) != null
         ble.listener = object : BleClient.Listener {
             override fun onScanResult(devices: List<BleClient.Entry>) {
                 ui.devices.clear(); ui.devices.addAll(devices)
             }
             override fun onStatus(status: String, connected: Boolean) {
                 ui.status = status; ui.connected = connected
+                // A successful connect saves the watch's address (see BleClient).
+                ui.hasWatchAddr = Prefs.watchAddress(this@MainActivity) != null
             }
             override fun onWriteResult(ok: Boolean) {
                 ui.status = if (ok) "Packet sent ✓" else "Write failed"
@@ -95,9 +111,48 @@ class MainActivity : ComponentActivity() {
                         onDisconnect = { ble.disconnect() },
                         onSend = { ble.write(it) },
                         onSyncHealthConnect = { startHealthConnectSync() },
+                        onToggleAutoSync = { toggleAutoSync(it) },
+                        onSetInterval = { setSyncInterval(it) },
                     )
                 }
             }
+        }
+    }
+
+    // ---- Auto-sync -----------------------------------------------------------
+    private fun toggleAutoSync(on: Boolean) {
+        if (on && Prefs.watchAddress(this) == null) {
+            ui.status = "Connect to the watch once first, then enable auto-sync"
+            ui.autoSyncOn = false
+            return
+        }
+        Prefs.setAutoSyncEnabled(this, on)
+        ui.autoSyncOn = on
+        SyncScheduler.apply(this)
+        if (on) {
+            ui.status = "Auto-sync on (every ${ui.intervalMin} min)"
+            // Ask for background Health Connect access so the worker can read
+            // while the app is closed (Android 14+). Best-effort: on older
+            // Android it is a no-op, and if denied the worker just skips a run.
+            if (hc.isAvailable()) {
+                lifecycleScope.launch {
+                    val granted = try { hc.grantedPermissions() } catch (e: Exception) { emptySet() }
+                    if (!granted.contains(hc.backgroundPermission)) {
+                        hcBackgroundLauncher.launch(hc.permissionsWithBackground)
+                    }
+                }
+            }
+        } else {
+            ui.status = "Auto-sync off"
+        }
+    }
+
+    private fun setSyncInterval(min: Int) {
+        Prefs.setIntervalMinutes(this, min)
+        ui.intervalMin = Prefs.intervalMinutes(this)
+        if (ui.autoSyncOn) {
+            SyncScheduler.apply(this)
+            ui.status = "Auto-sync every ${ui.intervalMin} min"
         }
     }
 
@@ -173,6 +228,10 @@ class UiState {
     var hcAvailable by mutableStateOf(false)
     var hcDetail by mutableStateOf("")
     val devices = mutableStateListOf<BleClient.Entry>()
+    // Auto-sync
+    var autoSyncOn by mutableStateOf(false)
+    var intervalMin by mutableIntStateOf(Prefs.DEFAULT_INTERVAL_MIN)
+    var hasWatchAddr by mutableStateOf(false)
 }
 
 @Composable
@@ -183,6 +242,8 @@ private fun DashboardScreen(
     onDisconnect: () -> Unit,
     onSend: (ByteArray) -> Unit,
     onSyncHealthConnect: () -> Unit,
+    onToggleAutoSync: (Boolean) -> Unit,
+    onSetInterval: (Int) -> Unit,
 ) {
     val scroll = rememberScrollState()
     Column(
@@ -238,6 +299,46 @@ private fun DashboardScreen(
                     enabled = ui.connected && ui.hcAvailable,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 ) { Text("Sync from Health Connect") }
+            }
+        }
+
+        Divider()
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text("Auto-sync (background)", style = MaterialTheme.typography.titleMedium)
+                    Switch(checked = ui.autoSyncOn, onCheckedChange = onToggleAutoSync)
+                }
+                Text(
+                    "Periodically reads Health Connect and pushes to the watch on its own. " +
+                        "Reconnects by the saved address, so connect once first.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (!ui.hasWatchAddr) {
+                    Text(
+                        "No watch paired yet - Scan and connect once to enable this.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Text(
+                    "Interval",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(15, 30, 60).forEach { m ->
+                        if (m == ui.intervalMin) {
+                            Button(onClick = { onSetInterval(m) }) { Text("$m min") }
+                        } else {
+                            OutlinedButton(onClick = { onSetInterval(m) }) { Text("$m min") }
+                        }
+                    }
+                }
             }
         }
 
