@@ -6,6 +6,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,14 +40,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /**
- * V1.0 - a foreground test harness. Scan, connect to the watch, and push
- * hand-set health values so the whole app -> watch BLE path (and the two-central
- * question, while Gadgetbridge is connected) can be validated before any
- * Gadgetbridge reading is wired in (V1.1).
+ * Scan and connect to the watch, then either push hand-set test values or sync
+ * real metrics from Health Connect (steps, heart rate, computed sleep score),
+ * writing them to the watch's health characteristic. Stress is left out - Health
+ * Connect has no stress type.
  */
 class MainActivity : ComponentActivity() {
 
     private lateinit var ble: BleClient
+    private lateinit var hc: HealthConnectSource
 
     private val ui = UiState()
 
@@ -55,9 +59,20 @@ class MainActivity : ComponentActivity() {
             if (ok) ble.startScan()
         }
 
+    private val hcPermissionLauncher =
+        registerForActivityResult(PermissionController.createRequestPermissionResultContract()) { granted ->
+            if (granted.containsAll(hc.permissions)) {
+                syncFromHealthConnect()
+            } else {
+                ui.status = "Health Connect permissions denied"
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ble = BleClient(this)
+        hc = HealthConnectSource(this)
+        ui.hcAvailable = hc.isAvailable()
         ble.listener = object : BleClient.Listener {
             override fun onScanResult(devices: List<BleClient.Entry>) {
                 ui.devices.clear(); ui.devices.addAll(devices)
@@ -79,6 +94,7 @@ class MainActivity : ComponentActivity() {
                         onConnect = { ble.connect(it.device) },
                         onDisconnect = { ble.disconnect() },
                         onSend = { ble.write(it) },
+                        onSyncHealthConnect = { startHealthConnectSync() },
                     )
                 }
             }
@@ -104,6 +120,46 @@ class MainActivity : ComponentActivity() {
         permissionLauncher.launch(requiredPermissions())
     }
 
+    // ---- Health Connect ------------------------------------------------------
+    private fun startHealthConnectSync() {
+        if (!ui.connected) {
+            ui.status = "Connect to the watch first"
+            return
+        }
+        if (!hc.isAvailable()) {
+            ui.status = "Health Connect not available on this phone"
+            return
+        }
+        lifecycleScope.launch {
+            if (hc.hasAllPermissions()) {
+                syncFromHealthConnect()
+            } else {
+                hcPermissionLauncher.launch(hc.permissions)
+            }
+        }
+    }
+
+    private fun syncFromHealthConnect() {
+        lifecycleScope.launch {
+            ui.status = "Reading Health Connect..."
+            val snap = try {
+                hc.read()
+            } catch (e: Exception) {
+                ui.status = "Health Connect read failed: ${e.message}"
+                return@launch
+            }
+            ui.hcDetail = snap.detail
+            val packet = HealthPacket.build(
+                sleepScore = snap.sleepScore,
+                steps = snap.steps,
+                stress = null,          // Health Connect has no stress type
+                hrBpm = snap.hrBpm,
+            )
+            val ok = ble.write(packet)
+            ui.status = if (ok) "Sent to watch ✓  (${snap.detail})" else "Write failed"
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         ble.disconnect()
@@ -114,6 +170,8 @@ class MainActivity : ComponentActivity() {
 class UiState {
     var status by mutableStateOf("Idle")
     var connected by mutableStateOf(false)
+    var hcAvailable by mutableStateOf(false)
+    var hcDetail by mutableStateOf("")
     val devices = mutableStateListOf<BleClient.Entry>()
 }
 
@@ -124,6 +182,7 @@ private fun DashboardScreen(
     onConnect: (BleClient.Entry) -> Unit,
     onDisconnect: () -> Unit,
     onSend: (ByteArray) -> Unit,
+    onSyncHealthConnect: () -> Unit,
 ) {
     val scroll = rememberScrollState()
     Column(
@@ -152,6 +211,26 @@ private fun DashboardScreen(
                         ) { Text("${e.name}  -  ${e.address}") }
                     }
                 }
+            }
+        }
+
+        Divider()
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text("Health Connect", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (ui.hcAvailable) "Reads steps, heart rate and a sleep score, then sends them."
+                    else "Not available on this phone (install/enable Health Connect).",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (ui.hcDetail.isNotEmpty()) {
+                    Text("Last read: ${ui.hcDetail}", style = MaterialTheme.typography.bodySmall)
+                }
+                Button(
+                    onClick = onSyncHealthConnect,
+                    enabled = ui.connected && ui.hcAvailable,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Sync from Health Connect") }
             }
         }
 

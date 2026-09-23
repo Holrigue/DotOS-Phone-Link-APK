@@ -6,16 +6,29 @@ and later to act as a small phone-side control panel.
 
 ## Status
 
-**V1.0 (this version): manual test harness.** Scan for the watch, connect, and
-push hand-set health values (sleep / steps / stress / heart) so the whole
-app -> watch BLE path can be validated before any Gadgetbridge reading is wired
-in. This is also how the "two centrals" question is tested: try sending while
-Gadgetbridge is connected to the watch - if the write succeeds, the watch
-accepts a second central.
+**V1.0: manual test harness.** Scan for the watch, connect, and push hand-set
+health values so the whole app -> watch BLE path can be validated. This is also
+how the "two centrals" question is tested: try sending while Gadgetbridge is
+connected to the watch - if the write succeeds, the watch accepts a second
+central.
 
-**V1.1 (next): read Gadgetbridge.** Point the app at Gadgetbridge's auto-export
-SQLite database, parse the latest samples, and send them automatically on an
-interval.
+**V1.1: Health Connect.** Reads the Amazfit's metrics from Health Connect (where
+Gadgetbridge publishes them) and sends them to the watch:
+
+- **Steps** (today's total) and **heart rate** (latest sample) - read directly.
+- **Sleep score** - Health Connect has no score, so one is derived from the last
+  sleep session's duration and its deep/REM share (see `HealthConnectSource`).
+- **Stress** - left out; Health Connect has no stress type.
+
+Sending is still manual ("Sync from Health Connect" button) in this version;
+automatic background sync is next.
+
+### Phone setup for Health Connect
+
+1. In Gadgetbridge -> External integrations -> Health Connect, enable
+   **Allow connection with Health Connect** (and "Sync after device sync").
+2. Grant this app the Health Connect read permissions when it asks (steps,
+   heart rate, sleep).
 
 ## How it talks to the watch
 
