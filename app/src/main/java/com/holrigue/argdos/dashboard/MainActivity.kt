@@ -205,10 +205,17 @@ private fun DashboardScreen(
                 Column(modifier = Modifier.padding(8.dp)) {
                     Text("Devices", fontWeight = FontWeight.Bold)
                     ui.devices.forEach { e ->
-                        OutlinedButton(
-                            onClick = { onConnect(e) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("${e.name}  -  ${e.address}") }
+                        if (e.isWatch) {
+                            Button(
+                                onClick = { onConnect(e) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("${e.name}  -  ${e.address}") }
+                        } else {
+                            OutlinedButton(
+                                onClick = { onConnect(e) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("${e.name}  -  ${e.address}") }
+                        }
                     }
                 }
             }

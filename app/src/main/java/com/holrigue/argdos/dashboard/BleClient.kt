@@ -9,10 +9,12 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import java.util.UUID
 
 /**
@@ -32,6 +34,10 @@ class BleClient(private val context: Context) {
     companion object {
         val SERVICE_UUID: UUID = UUID.fromString("a2470001-5a4b-4d55-9a3e-1c2d3e4f5a6b")
         val CHAR_UUID: UUID = UUID.fromString("a2470002-5a4b-4d55-9a3e-1c2d3e4f5a6b")
+        // The watch advertises the standard Alert Notification Service (0x1811)
+        // while its Android/Notify mode is up. We use that to recognise it even
+        // when Android reports its name as "(unknown)".
+        private val ANS_UUID: UUID = UUID.fromString("00001811-0000-1000-8000-00805f9b34fb")
         private const val SCAN_MS = 12_000L
     }
 
@@ -41,7 +47,12 @@ class BleClient(private val context: Context) {
         fun onWriteResult(ok: Boolean)
     }
 
-    data class Entry(val name: String, val address: String, val device: BluetoothDevice)
+    data class Entry(
+        val name: String,
+        val address: String,
+        val device: BluetoothDevice,
+        val isWatch: Boolean = false,
+    )
 
     var listener: Listener? = null
 
@@ -65,7 +76,12 @@ class BleClient(private val context: Context) {
         found.clear()
         scanning = true
         post { listener?.onStatus("Scanning...", false) }
-        scanner.startScan(scanCallback)
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        // No hard filter: we scan everything and flag the watch ourselves, so a
+        // watch whose service UUID sits only in the scan response is never missed.
+        scanner.startScan(null, settings, scanCallback)
         main.postDelayed({ stopScan() }, SCAN_MS)
     }
 
@@ -79,9 +95,18 @@ class BleClient(private val context: Context) {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val dev = result.device ?: return
-            val name = dev.name ?: result.scanRecord?.deviceName ?: "(unknown)"
-            found[dev.address] = Entry(name, dev.address, dev)
-            post { listener?.onScanResult(found.values.toList()) }
+            val uuids = result.scanRecord?.serviceUuids
+            val isWatch = uuids?.any { it == ParcelUuid(ANS_UUID) } == true
+            val rawName = dev.name ?: result.scanRecord?.deviceName
+            val name = when {
+                isWatch -> "ARGUS Watch" + (rawName?.let { " ($it)" } ?: "")
+                rawName != null -> rawName
+                else -> "(unknown)"
+            }
+            found[dev.address] = Entry(name, dev.address, dev, isWatch)
+            // Watches first, so the T-Watch is easy to spot among many devices.
+            val sorted = found.values.sortedByDescending { it.isWatch }
+            post { listener?.onScanResult(sorted) }
         }
     }
 
