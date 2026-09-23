@@ -25,10 +25,16 @@ class HealthConnectSource(private val context: Context) {
 
     data class Snapshot(
         val steps: Int?,
-        val hrBpm: Int?,
+        val hrLow: Int?,
+        val hrHigh: Int?,
         val sleepScore: Int?,
         val detail: String,
     )
+
+    companion object {
+        // Window over which the heart-rate low/high is taken ("recent minutes").
+        val HR_WINDOW: Duration = Duration.ofMinutes(30)
+    }
 
     val permissions: Set<String> = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
@@ -77,24 +83,28 @@ class HealthConnectSource(private val context: Context) {
             null
         }
 
-        // Heart rate: the most recent sample in the last 6 hours.
-        val hr: Int? = try {
+        // Heart rate: lowest and highest over the recent window.
+        var hrLow: Int? = null
+        var hrHigh: Int? = null
+        try {
             val resp = c.readRecords(
                 ReadRecordsRequest(
                     recordType = HeartRateRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(now.minus(Duration.ofHours(6)), now),
+                    timeRangeFilter = TimeRangeFilter.between(now.minus(HR_WINDOW), now),
                 )
             )
-            var latestTime: Instant? = null
-            var latestBpm: Long? = null
+            var lo = Long.MAX_VALUE
+            var hi = Long.MIN_VALUE
             for (rec in resp.records) for (s in rec.samples) {
-                if (latestTime == null || s.time.isAfter(latestTime)) {
-                    latestTime = s.time; latestBpm = s.beatsPerMinute
+                val bpm = s.beatsPerMinute
+                if (bpm in 1..300) {           // ignore obviously bad samples
+                    if (bpm < lo) lo = bpm
+                    if (bpm > hi) hi = bpm
                 }
             }
-            latestBpm?.toInt()
+            if (hi >= lo) { hrLow = lo.toInt(); hrHigh = hi.toInt() }
         } catch (e: Exception) {
-            null
+            // leave low/high null
         }
 
         // Sleep: score from the most recent session (last 36 h).
@@ -110,8 +120,9 @@ class HealthConnectSource(private val context: Context) {
             null
         }
 
-        val detail = "steps=${steps ?: "-"}  hr=${hr ?: "-"}  sleep=${sleep ?: "-"}"
-        return Snapshot(steps, hr, sleep, detail)
+        val hrText = if (hrHigh != null) "$hrHigh/$hrLow" else "-"
+        val detail = "steps=${steps ?: "-"}  hr=$hrText  sleep=${sleep ?: "-"}"
+        return Snapshot(steps, hrLow, hrHigh, sleep, detail)
     }
 
     /**

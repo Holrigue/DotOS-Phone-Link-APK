@@ -208,7 +208,8 @@ class MainActivity : ComponentActivity() {
                 sleepScore = snap.sleepScore,
                 steps = snap.steps,
                 stress = null,          // Health Connect has no stress type
-                hrBpm = snap.hrBpm,
+                hrLow = snap.hrLow,
+                hrHigh = snap.hrHigh,
             )
             val ok = ble.write(packet)
             ui.status = if (ok) "Sent to watch ✓  (${snap.detail})" else "Write failed"
@@ -361,7 +362,9 @@ private fun DashboardScreen(
                     sleepScore = if (sleep.on) sleep.value else null,
                     steps = if (steps.on) steps.value else null,
                     stress = if (stress.on) stress.value else null,
-                    hrBpm = if (heart.on) heart.value else null,
+                    // Test path sends the one slider value as both low and high.
+                    hrLow = if (heart.on) heart.value else null,
+                    hrHigh = if (heart.on) heart.value else null,
                 )
                 onSend(packet)
             },

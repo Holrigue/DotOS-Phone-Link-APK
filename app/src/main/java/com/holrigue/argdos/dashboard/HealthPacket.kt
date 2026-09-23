@@ -7,15 +7,19 @@ package com.holrigue.argdos.dashboard
  *
  *   byte 0 : version (= 1)
  *   byte 1 : field mask (bit0 sleep, bit1 steps, bit2 goal, bit3 stress,
- *            bit4 hr average, bit5 hr sample)
+ *            bit4 hr average, bit5 hr sample, bit6 hr min, bit7 hr max)
  *   then each present field, in bit order, little-endian:
- *     sleep  u8   (0..100)
- *     steps  u32
- *     goal   u32  (the watch ignores it - the goal is Settings-owned)
- *     stress u8   (0..100)
- *     hr     u16  (bpm)
+ *     sleep   u8   (0..100)
+ *     steps   u32
+ *     goal    u32  (the watch ignores it - the goal is Settings-owned)
+ *     stress  u8   (0..100)
+ *     hr      u16  (bpm average - legacy, no longer sent)
+ *     hr min  u16  (lowest bpm over a recent window)
+ *     hr max  u16  (highest bpm over a recent window)
  *
- * A null field is simply omitted (its mask bit stays 0).
+ * A null field is simply omitted (its mask bit stays 0). We now send the
+ * low/high pair (bit6/bit7) instead of the average (bit4); the watch shows
+ * "high / low".
  */
 object HealthPacket {
     const val VERSION = 0x01
@@ -24,16 +28,20 @@ object HealthPacket {
     const val BIT_GOAL = 0x04
     const val BIT_STRESS = 0x08
     const val BIT_HR_AVG = 0x10
+    const val BIT_HR_MIN = 0x40
+    const val BIT_HR_MAX = 0x80
 
     fun build(
         sleepScore: Int? = null,
         steps: Int? = null,
         stress: Int? = null,
-        hrBpm: Int? = null,
+        hrLow: Int? = null,
+        hrHigh: Int? = null,
     ): ByteArray {
         val body = ArrayList<Byte>(16)
         var mask = 0
 
+        // Emit fields in ascending bit order, matching the firmware parser.
         sleepScore?.let {
             mask = mask or BIT_SLEEP
             body.add(clamp0(it, 100).toByte())
@@ -46,8 +54,12 @@ object HealthPacket {
             mask = mask or BIT_STRESS
             body.add(clamp0(it, 100).toByte())
         }
-        hrBpm?.let {
-            mask = mask or BIT_HR_AVG
+        hrLow?.let {
+            mask = mask or BIT_HR_MIN
+            putU16(body, it.coerceIn(0, 0xFFFF))
+        }
+        hrHigh?.let {
+            mask = mask or BIT_HR_MAX
             putU16(body, it.coerceIn(0, 0xFFFF))
         }
 

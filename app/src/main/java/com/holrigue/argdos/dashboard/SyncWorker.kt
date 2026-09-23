@@ -34,7 +34,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
 
         // Nothing worth sending (all metrics missing) - treat as a no-op success.
-        if (snap.steps == null && snap.hrBpm == null && snap.sleepScore == null) {
+        if (snap.steps == null && snap.hrHigh == null && snap.sleepScore == null) {
             return Result.success()
         }
 
@@ -42,7 +42,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             sleepScore = snap.sleepScore,
             steps = snap.steps,
             stress = null,          // Health Connect has no stress type
-            hrBpm = snap.hrBpm,
+            hrLow = snap.hrLow,
+            hrHigh = snap.hrHigh,
         )
 
         val ok = BlePush.push(ctx, address, packet)

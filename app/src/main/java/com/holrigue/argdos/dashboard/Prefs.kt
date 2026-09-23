@@ -13,7 +13,7 @@ object Prefs {
     private const val K_AUTO = "auto_sync"
     private const val K_INTERVAL = "interval_min"
 
-    const val DEFAULT_INTERVAL_MIN = 30
+    const val DEFAULT_INTERVAL_MIN = 15
     const val MIN_INTERVAL_MIN = 15   // WorkManager's floor for periodic work
 
     private fun sp(c: Context) = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
