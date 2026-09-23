@@ -129,6 +129,11 @@ class BleClient(private val context: Context) {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 post { listener?.onStatus("Connected, discovering...", false) }
+                // A firmware update can change the watch's GATT table (the health
+                // characteristic moved onto the ANS service). Android caches the
+                // old table for a bonded device and would otherwise never see the
+                // new characteristic, so clear the cache before discovering.
+                refreshGattCache(g)
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 writeChar = null
@@ -170,6 +175,20 @@ class BleClient(private val context: Context) {
             ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             ch.value = packet
             g.writeCharacteristic(ch)
+        }
+    }
+
+    // Clear Android's cached GATT service table via the hidden BluetoothGatt
+    // .refresh() method (reflection). There is no public API for this; it is the
+    // standard way to force re-discovery after a peripheral's services change.
+    private fun refreshGattCache(g: BluetoothGatt) {
+        try {
+            @Suppress("DiscouragedPrivateApi")
+            val refresh = g.javaClass.getMethod("refresh")
+            refresh.invoke(g)
+        } catch (_: Exception) {
+            // Method unavailable on this platform; discovery still runs, and
+            // forgetting the device in Bluetooth settings is the manual fallback.
         }
     }
 
