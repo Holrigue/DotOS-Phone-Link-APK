@@ -32,10 +32,15 @@ automatic background sync is next.
 
 ## How it talks to the watch
 
-The firmware exposes a vendor health-input GATT service:
+The firmware exposes a vendor health-input write characteristic on its Alert
+Notification Service (a standalone 3rd GATT service did not register reliably on
+the watch's BLE stack, so the characteristic rides the always-present ANS):
 
-- Service `a2470001-5a4b-4d55-9a3e-1c2d3e4f5a6b`
+- Service `00001811-0000-1000-8000-00805f9b34fb` (Alert Notification Service)
 - Write characteristic `a2470002-5a4b-4d55-9a3e-1c2d3e4f5a6b`
+
+The app looks for the characteristic under the ANS first, and falls back to the
+old standalone service `a2470001-5a4b-4d55-9a3e-1c2d3e4f5a6b` for older firmware.
 
 Packet (little-endian): `[version=1][field mask][fields...]`, mask bits
 sleep(1) / steps(2) / goal(4) / stress(8) / hr-avg(16); each present field

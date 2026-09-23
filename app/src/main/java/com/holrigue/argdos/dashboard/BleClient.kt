@@ -137,10 +137,14 @@ class BleClient(private val context: Context) {
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            val svc = g.getService(SERVICE_UUID)
-            val ch = svc?.getCharacteristic(CHAR_UUID)
+            // The health-input characteristic now lives ON the Alert Notification
+            // Service (0x1811); a separate 3rd GATT service did not register
+            // reliably on the watch's BLE stack. Look for it under ANS first, then
+            // fall back to the old standalone service for older firmware.
+            val ch = g.getService(ANS_UUID)?.getCharacteristic(CHAR_UUID)
+                ?: g.getService(SERVICE_UUID)?.getCharacteristic(CHAR_UUID)
             if (ch == null) {
-                post { listener?.onStatus("Health service not found on this device", true) }
+                post { listener?.onStatus("Health characteristic not found on this device", true) }
                 return
             }
             writeChar = ch
