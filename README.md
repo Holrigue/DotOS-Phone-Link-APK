@@ -58,6 +58,43 @@ sleep(1) / steps(2) / goal(4) / stress(8) / hr-avg(16); each present field
 follows in bit order: sleep u8, steps u32, goal u32 (ignored by the watch - the
 goal is set in the watch's Settings), stress u8, hr u16. See `HealthPacket.kt`.
 
+## Find (ring the watch / ring the phone)
+
+Two directions, over a dedicated characteristic on the ANS
+(`a2470003-5a4b-4d55-9a3e-1c2d3e4f5a6b`):
+
+- **Ring watch** (button in the app) → the watch wakes, flashes and buzzes at
+  full strength plus a loud chime.
+- **Ring phone** (Find on the watch) → the phone rings at **max alarm volume**
+  (the alarm stream is used on purpose, so it rings through Do-Not-Disturb) and
+  vibrates, with a Stop action and a 60 s safety auto-stop.
+
+### The "Watch link active" persistent notification
+
+Turning on **"Ring even when app is closed"** (Find card) starts a small
+**foreground service** that keeps the BLE link so the watch can ring the phone
+with the app closed. Android **requires** any such service to show an ongoing
+notification while it runs — that is the **"Watch link active"** entry. It is
+expected, not a bug or malware.
+
+It is deliberately on the lowest-importance channel (**Watch link**): silent, no
+banner, no vibration — it just sits at the bottom of the shade. The separate
+**Find ringing** channel is the one that actually alerts when the watch calls.
+
+To change it:
+
+- **Don't want the background link?** Turn **"Ring even when app is closed"**
+  OFF. The service stops and the notification disappears — the phone then only
+  rings while the app is open.
+- **Want the link but not the label?** Long-press the notification →
+  turn off notifications for the **"Watch link"** channel only. On current
+  Android this hides / minimises it while the service keeps running; leave the
+  **"Find ringing"** channel on so the actual ring still alerts.
+
+The service also re-arms after a reboot (`BootReceiver`), and hands off with the
+in-app path — it is stopped while the app is open and (re)started when it leaves,
+so only one BLE connection to the watch is ever held at a time.
+
 ## Building
 
 CI (GitHub Actions) builds a debug APK on every push and uploads it as the
