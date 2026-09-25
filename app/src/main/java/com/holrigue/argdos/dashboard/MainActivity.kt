@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Divider
@@ -114,6 +116,7 @@ class MainActivity : ComponentActivity() {
                         ui = ui,
                         onScan = { ensurePermissionsThenScan() },
                         onConnect = { ble.connect(it.device) },
+                        onReconnectSaved = { reconnectSaved() },
                         onDisconnect = { ble.disconnect() },
                         onSend = { ble.write(it) },
                         onSyncHealthConnect = { startHealthConnectSync() },
@@ -181,6 +184,30 @@ class MainActivity : ComponentActivity() {
         permissionLauncher.launch(requiredPermissions())
     }
 
+    // Reconnect straight to the saved watch by MAC, no scan. Used when the scan
+    // no longer surfaces the watch (e.g. it is already OS-connected, or advertises
+    // without the ANS label after a re-flash).
+    private fun reconnectSaved() {
+        if (!ble.isBluetoothOn()) {
+            ui.status = "Turn Bluetooth on first"
+            return
+        }
+        val addr = Prefs.watchAddress(this)
+        if (addr == null) {
+            ui.status = "No saved watch yet - Scan and connect once first"
+            return
+        }
+        // BLUETOOTH_CONNECT is enough for a direct connect (no scan permission).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            permissionLauncher.launch(requiredPermissions())
+            return
+        }
+        ui.status = "Reconnecting to saved watch ($addr)..."
+        ble.connectByAddress(addr)
+    }
+
     // ---- Health Connect ------------------------------------------------------
     private fun startHealthConnectSync() {
         if (!ui.connected) {
@@ -246,6 +273,7 @@ private fun DashboardScreen(
     ui: UiState,
     onScan: () -> Unit,
     onConnect: (BleClient.Entry) -> Unit,
+    onReconnectSaved: () -> Unit,
     onDisconnect: () -> Unit,
     onSend: (ByteArray) -> Unit,
     onSyncHealthConnect: () -> Unit,
@@ -285,20 +313,36 @@ private fun DashboardScreen(
             OutlinedButton(onClick = onDisconnect, enabled = ui.connected) { Text("Disconnect") }
         }
 
+        // Direct reconnect by the saved MAC — no scan needed. Only useful once a
+        // watch has been paired, and pointless while already connected.
+        if (ui.hasWatchAddr && !ui.connected) {
+            OutlinedButton(
+                onClick = onReconnectSaved,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = DotWhite),
+                border = BorderStroke(1.dp, DotRed),
+            ) { Text("Reconnect saved watch") }
+        }
+
         if (ui.devices.isNotEmpty() && !ui.connected) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(8.dp)) {
-                    Text("Devices", fontWeight = FontWeight.Bold)
+                    Text("Devices", fontWeight = FontWeight.Bold, color = DotWhite)
                     ui.devices.forEach { e ->
                         if (e.isWatch) {
+                            // The watch: filled red, so the accent is reserved for
+                            // the one device that matters.
                             Button(
                                 onClick = { onConnect(e) },
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text("${e.name}  -  ${e.address}") }
                         } else {
+                            // Everything else: white text on a grey outline, not red.
                             OutlinedButton(
                                 onClick = { onConnect(e) },
                                 modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = DotWhite),
+                                border = BorderStroke(1.dp, DotGrey.copy(alpha = 0.4f)),
                             ) { Text("${e.name}  -  ${e.address}") }
                         }
                     }

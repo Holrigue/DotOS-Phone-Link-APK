@@ -127,6 +127,23 @@ class BleClient(private val context: Context) {
         openGatt(device)
     }
 
+    // Direct connect by MAC to the watch we saved on a previous successful
+    // connect, without scanning. Works even when the scan list does not surface
+    // the watch (already OS-connected, or advertising without the ANS label), as
+    // long as it is connectable. The address comes from Prefs.watchAddress.
+    fun connectByAddress(address: String) {
+        val dev = try {
+            adapter?.getRemoteDevice(address)
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+        if (dev == null) {
+            post { listener?.onStatus("No valid saved watch address", false) }
+            return
+        }
+        connect(dev)
+    }
+
     private fun openGatt(device: BluetoothDevice) {
         post { listener?.onStatus("Connecting to ${device.address}...", false) }
         gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
