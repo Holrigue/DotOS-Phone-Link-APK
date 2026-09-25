@@ -1,0 +1,67 @@
+name: Release APK
+
+# Push a tag like v1.2 and this builds the APK and publishes it as a public
+# GitHub Release asset (a permanent, login-free download link), separate from
+# the 90-day CI artifact in build.yml.
+on:
+  push:
+    tags:
+      - "v*"
+  # Also fires when a release is published from the GitHub web UI (Draft a new
+  # release -> create tag -> Publish). The build then attaches the APK to that
+  # same release, so no terminal / tag push is needed.
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the Release and upload the asset
+
+jobs:
+  release:
+    name: Build and publish APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Rename APK to a versioned name
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "dist/DotOS-Dashboard-${GITHUB_REF_NAME}.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DotOS Dashboard ${{ github.ref_name }}
+          files: dist/DotOS-Dashboard-${{ github.ref_name }}.apk
+          generate_release_notes: true
+          body: |
+            **DotOS Dashboard** — companion health app for the DotOS T-Watch Ultra firmware.
+
+            This is a **debug-signed** APK for side-loading. Enable "install unknown apps"
+            for your browser/file manager, install it, then grant Bluetooth (Nearby devices)
+            and Health Connect permissions on first launch.
+
+            **What's in this build**
+            - DotOS charter: black / white / grey UI with a single red accent, dot-matrix launcher icon.
+            - Auto-retry on the first reconnect after a firmware re-flash (Android GATT error 133).
+            - Health Connect sync (sleep / steps / heart-rate high-low) — manual or background (default 15 min).
+
+            **Pairing:** on the watch open Notify and Enable a mode, then Scan in the app and tap
+            **ARGUS Watch**. After a re-flash that still won't connect, forget the device in the
+            phone's Bluetooth settings and Scan again.

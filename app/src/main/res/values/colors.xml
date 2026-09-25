@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DotOS charter: monochrome with a single red accent, matching the
+         watchface (white / red / black / grey). -->
+    <color name="dot_black">#000000</color>
+    <color name="dot_surface">#111111</color>
+    <color name="dot_white">#FFFFFF</color>
+    <color name="dot_grey">#9A9A9A</color>
+    <color name="dot_red">#E02020</color>
+</resources>
