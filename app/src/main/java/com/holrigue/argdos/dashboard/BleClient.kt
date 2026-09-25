@@ -20,9 +20,11 @@ import java.util.UUID
 /**
  * Minimal BLE client for the watch's vendor health-input service.
  *
- * Scans for nearby devices (the watch advertises as "InfiniTime"), connects to
- * one, discovers the health service, and writes packets to the write
- * characteristic. All state is delivered on the main thread via [listener].
+ * Scans for nearby devices (the watch is recognised by its Alert Notification
+ * Service UUID rather than by name), connects to one, discovers the health
+ * service, and writes packets to the write characteristic. A first reconnect
+ * after a firmware re-flash is retried once automatically. All state is
+ * delivered on the main thread via [listener].
  *
  * Permissions (BLUETOOTH_SCAN / BLUETOOTH_CONNECT on API 31+, or the legacy
  * Bluetooth + fine-location set below) are the caller's responsibility; this
@@ -64,6 +66,13 @@ class BleClient(private val context: Context) {
     private var writeChar: BluetoothGattCharacteristic? = null
     private val found = LinkedHashMap<String, Entry>()
     private var scanning = false
+    // The device we are trying to reach, and whether we have already spent our
+    // one automatic retry on it. Re-flashing the watch clears its BLE bond, and
+    // the first reconnect from a phone that still lists it very often fails with
+    // GATT error 133; a single fresh retry clears it without the user having to
+    // forget the device.
+    private var target: BluetoothDevice? = null
+    private var retried = false
 
     fun isBluetoothOn(): Boolean = adapter?.isEnabled == true
 
@@ -113,11 +122,18 @@ class BleClient(private val context: Context) {
     // ---- Connect -------------------------------------------------------------
     fun connect(device: BluetoothDevice) {
         stopScan()
+        target = device
+        retried = false
+        openGatt(device)
+    }
+
+    private fun openGatt(device: BluetoothDevice) {
         post { listener?.onStatus("Connecting to ${device.address}...", false) }
         gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
     fun disconnect() {
+        target = null
         gatt?.disconnect()
         gatt?.close()
         gatt = null
@@ -127,7 +143,8 @@ class BleClient(private val context: Context) {
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
+            if (newState == BluetoothProfile.STATE_CONNECTED &&
+                status == BluetoothGatt.GATT_SUCCESS) {
                 post { listener?.onStatus("Connected, discovering...", false) }
                 // A firmware update can change the watch's GATT table (the health
                 // characteristic moved onto the ANS service). Android caches the
@@ -137,7 +154,20 @@ class BleClient(private val context: Context) {
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 writeChar = null
-                post { listener?.onStatus("Disconnected", false) }
+                // A non-success status before we ever reached "Ready" is Android's
+                // transient connect failure (typically 133) that plagues the first
+                // reconnect after a re-flash. Close this GATT and retry once with a
+                // fresh one before giving up.
+                val dev = target
+                if (status != BluetoothGatt.GATT_SUCCESS && dev != null && !retried) {
+                    retried = true
+                    try { g.close() } catch (_: Exception) {}
+                    gatt = null
+                    post { listener?.onStatus("Reconnecting...", false) }
+                    main.postDelayed({ if (target === dev) openGatt(dev) }, 600)
+                } else {
+                    post { listener?.onStatus("Disconnected", false) }
+                }
             }
         }
 
@@ -153,6 +183,9 @@ class BleClient(private val context: Context) {
                 return
             }
             writeChar = ch
+            // We are live; spend no more automatic retries, so a later intentional
+            // disconnect is reported plainly instead of triggering a reconnect.
+            retried = true
             // Remember this watch so the background auto-sync can reconnect to it
             // by address without scanning.
             try { Prefs.setWatchAddress(context, g.device.address) } catch (_: Exception) {}
