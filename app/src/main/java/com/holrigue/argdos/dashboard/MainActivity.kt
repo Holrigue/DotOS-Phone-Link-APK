@@ -1,8 +1,17 @@
 package com.holrigue.argdos.dashboard
 
 import android.Manifest
+import android.media.AudioManager
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -60,6 +69,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var hc: HealthConnectSource
 
     private val ui = UiState()
+    private val handler = Handler(Looper.getMainLooper())
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
@@ -107,6 +117,9 @@ class MainActivity : ComponentActivity() {
             override fun onWriteResult(ok: Boolean) {
                 ui.status = if (ok) "Packet sent ✓" else "Write failed"
             }
+            override fun onFindRing(active: Boolean) {
+                if (active) startPhoneRing() else stopPhoneRing()
+            }
         }
 
         setContent {
@@ -122,6 +135,8 @@ class MainActivity : ComponentActivity() {
                         onSyncHealthConnect = { startHealthConnectSync() },
                         onToggleAutoSync = { toggleAutoSync(it) },
                         onSetInterval = { setSyncInterval(it) },
+                        onRingWatch = { ringWatch() },
+                        onStopRing = { stopPhoneRing() },
                     )
                 }
             }
@@ -208,6 +223,59 @@ class MainActivity : ComponentActivity() {
         ble.connectByAddress(addr)
     }
 
+    // ---- Find --------------------------------------------------------------
+    private var ringtone: Ringtone? = null
+    private val vibrator: Vibrator? by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+    }
+    private val stopRingRunnable = Runnable { stopPhoneRing() }
+
+    // Phone -> watch: ask the watch to ring.
+    private fun ringWatch() {
+        if (!ble.canFind()) {
+            ui.status = "Connect to the watch first (Find needs the live link)"
+            return
+        }
+        val ok = ble.ringWatch(true)
+        ui.status = if (ok) "Ringing the watch..." else "Couldn't reach the watch"
+    }
+
+    // Watch -> phone: ring this phone (alarm tone + vibrate) until stopped or a
+    // safety timeout, so a call from the watch can't leave it ringing forever.
+    private fun startPhoneRing() {
+        if (ui.phoneRinging) return
+        try {
+            val uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ringtone = RingtoneManager.getRingtone(this, uri)?.apply {
+                streamType = AudioManager.STREAM_ALARM
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
+                play()
+            }
+        } catch (_: Exception) {}
+        try {
+            val pattern = longArrayOf(0, 600, 400)
+            vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
+        } catch (_: Exception) {}
+        ui.phoneRinging = true
+        ui.status = "Watch is ringing your phone"
+        handler.removeCallbacks(stopRingRunnable)
+        handler.postDelayed(stopRingRunnable, 60_000)   // safety auto-stop
+    }
+
+    private fun stopPhoneRing() {
+        handler.removeCallbacks(stopRingRunnable)
+        try { ringtone?.stop() } catch (_: Exception) {}
+        ringtone = null
+        try { vibrator?.cancel() } catch (_: Exception) {}
+        ui.phoneRinging = false
+    }
+
     // ---- Health Connect ------------------------------------------------------
     private fun startHealthConnectSync() {
         if (!ui.connected) {
@@ -251,6 +319,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopPhoneRing()
         ble.disconnect()
     }
 }
@@ -266,6 +335,8 @@ class UiState {
     var autoSyncOn by mutableStateOf(false)
     var intervalMin by mutableIntStateOf(Prefs.DEFAULT_INTERVAL_MIN)
     var hasWatchAddr by mutableStateOf(false)
+    // Find
+    var phoneRinging by mutableStateOf(false)
 }
 
 @Composable
@@ -279,6 +350,8 @@ private fun DashboardScreen(
     onSyncHealthConnect: () -> Unit,
     onToggleAutoSync: (Boolean) -> Unit,
     onSetInterval: (Int) -> Unit,
+    onRingWatch: () -> Unit,
+    onStopRing: () -> Unit,
 ) {
     val scroll = rememberScrollState()
     Column(
@@ -367,6 +440,29 @@ private fun DashboardScreen(
                     enabled = ui.connected && ui.hcAvailable,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 ) { Text("Sync from Health Connect") }
+            }
+        }
+
+        Divider()
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text("Find", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Ring the watch from here; the watch can also ring this phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(
+                    onClick = onRingWatch,
+                    enabled = ui.connected,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Ring watch") }
+                if (ui.phoneRinging) {
+                    Button(
+                        onClick = onStopRing,
+                        colors = ButtonDefaults.buttonColors(containerColor = DotRed),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    ) { Text("Stop ringing") }
+                }
             }
         }
 

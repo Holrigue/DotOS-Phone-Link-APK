@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
@@ -36,6 +37,12 @@ class BleClient(private val context: Context) {
     companion object {
         val SERVICE_UUID: UUID = UUID.fromString("a2470001-5a4b-4d55-9a3e-1c2d3e4f5a6b")
         val CHAR_UUID: UUID = UUID.fromString("a2470002-5a4b-4d55-9a3e-1c2d3e4f5a6b")
+        // Find channel (Find-My-Watch / Find-My-Phone): phone writes 0x01/0x00 to
+        // ring/stop the watch; the watch notifies 0x01/0x00 to ring/stop the phone.
+        val FIND_UUID: UUID = UUID.fromString("a2470003-5a4b-4d55-9a3e-1c2d3e4f5a6b")
+        // Client Characteristic Configuration Descriptor - written to subscribe to
+        // the Find characteristic's notifications.
+        private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         // The watch advertises the standard Alert Notification Service (0x1811)
         // while its Android/Notify mode is up. We use that to recognise it even
         // when Android reports its name as "(unknown)".
@@ -47,6 +54,8 @@ class BleClient(private val context: Context) {
         fun onScanResult(devices: List<Entry>)
         fun onStatus(status: String, connected: Boolean)
         fun onWriteResult(ok: Boolean)
+        // The watch asked the phone to ring (true) or stop (false).
+        fun onFindRing(active: Boolean) {}
     }
 
     data class Entry(
@@ -64,6 +73,7 @@ class BleClient(private val context: Context) {
 
     private var gatt: BluetoothGatt? = null
     private var writeChar: BluetoothGattCharacteristic? = null
+    private var findChar: BluetoothGattCharacteristic? = null
     private val found = LinkedHashMap<String, Entry>()
     private var scanning = false
     // The device we are trying to reach, and whether we have already spent our
@@ -155,6 +165,7 @@ class BleClient(private val context: Context) {
         gatt?.close()
         gatt = null
         writeChar = null
+        findChar = null
         post { listener?.onStatus("Disconnected", false) }
     }
 
@@ -171,6 +182,7 @@ class BleClient(private val context: Context) {
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 writeChar = null
+                findChar = null
                 // A non-success status before we ever reached "Ready" is Android's
                 // transient connect failure (typically 133) that plagues the first
                 // reconnect after a re-flash. Close this GATT and retry once with a
@@ -203,6 +215,15 @@ class BleClient(private val context: Context) {
             // We are live; spend no more automatic retries, so a later intentional
             // disconnect is reported plainly instead of triggering a reconnect.
             retried = true
+
+            // Find characteristic (optional): if present, subscribe so the watch
+            // can ring the phone. Absent on older firmware - the health bridge
+            // still works without it.
+            val fc = g.getService(ANS_UUID)?.getCharacteristic(FIND_UUID)
+                ?: g.getService(SERVICE_UUID)?.getCharacteristic(FIND_UUID)
+            findChar = fc
+            if (fc != null) subscribeFind(g, fc)
+
             // Remember this watch so the background auto-sync can reconnect to it
             // by address without scanning.
             try { Prefs.setWatchAddress(context, g.device.address) } catch (_: Exception) {}
@@ -211,9 +232,58 @@ class BleClient(private val context: Context) {
 
         @Suppress("DEPRECATION")
         override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            // The Find write is fire-and-forget; only report health-packet writes.
+            if (ch.uuid == FIND_UUID) return
             post { listener?.onWriteResult(status == BluetoothGatt.GATT_SUCCESS) }
         }
+
+        // Watch -> phone find op. Deprecated overload (value on the characteristic)
+        // for API < 33; the 33+ overload delivers the same bytes and also lands
+        // here on older toolchains, so reading ch.value covers both.
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+            if (ch.uuid != FIND_UUID) return
+            val op = ch.value?.firstOrNull() ?: return
+            post { listener?.onFindRing(op.toInt() != 0) }
+        }
     }
+
+    // Turn on notifications for the Find characteristic: tell Android to deliver
+    // them, then write the CCCD so the watch actually sends them.
+    private fun subscribeFind(g: BluetoothGatt, fc: BluetoothGattCharacteristic) {
+        try {
+            g.setCharacteristicNotification(fc, true)
+            val cccd = fc.getDescriptor(CCCD_UUID) ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+            } else {
+                @Suppress("DEPRECATION")
+                cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                @Suppress("DEPRECATION")
+                g.writeDescriptor(cccd)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    // Phone -> watch: ring (true) or stop (false) the watch.
+    @Suppress("DEPRECATION")
+    fun ringWatch(on: Boolean): Boolean {
+        val g = gatt ?: return false
+        val fc = findChar ?: return false
+        val packet = byteArrayOf(if (on) 0x01 else 0x00)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(fc, packet, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
+                BluetoothGatt.GATT_SUCCESS
+        } else {
+            fc.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            fc.value = packet
+            g.writeCharacteristic(fc)
+        }
+    }
+
+    // True once connected and the watch exposes the Find characteristic.
+    fun canFind(): Boolean = gatt != null && findChar != null
 
     // ---- Write ---------------------------------------------------------------
     @Suppress("DEPRECATION")
