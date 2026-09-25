@@ -69,7 +69,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var hc: HealthConnectSource
 
     private val ui = UiState()
-    private val handler = Handler(Looper.getMainLooper())
+
+    // Best-effort POST_NOTIFICATIONS grant so the background Find ring can post.
+    private val notifPermLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
@@ -105,6 +108,7 @@ class MainActivity : ComponentActivity() {
         ui.autoSyncOn = Prefs.autoSyncEnabled(this)
         ui.intervalMin = Prefs.intervalMinutes(this)
         ui.hasWatchAddr = Prefs.watchAddress(this) != null
+        ui.findBackgroundOn = Prefs.findBackgroundEnabled(this)
         ble.listener = object : BleClient.Listener {
             override fun onScanResult(devices: List<BleClient.Entry>) {
                 ui.devices.clear(); ui.devices.addAll(devices)
@@ -137,6 +141,7 @@ class MainActivity : ComponentActivity() {
                         onSetInterval = { setSyncInterval(it) },
                         onRingWatch = { ringWatch() },
                         onStopRing = { stopPhoneRing() },
+                        onToggleFindBackground = { setFindBackground(it) },
                     )
                 }
             }
@@ -224,17 +229,6 @@ class MainActivity : ComponentActivity() {
     }
 
     // ---- Find --------------------------------------------------------------
-    private var ringtone: Ringtone? = null
-    private val vibrator: Vibrator? by lazy {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        }
-    }
-    private val stopRingRunnable = Runnable { stopPhoneRing() }
-
     // Phone -> watch: ask the watch to ring.
     private fun ringWatch() {
         if (!ble.canFind()) {
@@ -245,35 +239,42 @@ class MainActivity : ComponentActivity() {
         ui.status = if (ok) "Ringing the watch..." else "Couldn't reach the watch"
     }
 
-    // Watch -> phone: ring this phone (alarm tone + vibrate) until stopped or a
-    // safety timeout, so a call from the watch can't leave it ringing forever.
+    // Watch -> phone: ring this phone at max alarm volume (shared PhoneRinger),
+    // used while the app is open; the same ringer runs from FindService when it
+    // is closed.
     private fun startPhoneRing() {
-        if (ui.phoneRinging) return
-        try {
-            val uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            ringtone = RingtoneManager.getRingtone(this, uri)?.apply {
-                streamType = AudioManager.STREAM_ALARM
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
-                play()
-            }
-        } catch (_: Exception) {}
-        try {
-            val pattern = longArrayOf(0, 600, 400)
-            vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
-        } catch (_: Exception) {}
+        PhoneRinger.start(this)
         ui.phoneRinging = true
         ui.status = "Watch is ringing your phone"
-        handler.removeCallbacks(stopRingRunnable)
-        handler.postDelayed(stopRingRunnable, 60_000)   // safety auto-stop
     }
 
     private fun stopPhoneRing() {
-        handler.removeCallbacks(stopRingRunnable)
-        try { ringtone?.stop() } catch (_: Exception) {}
-        ringtone = null
-        try { vibrator?.cancel() } catch (_: Exception) {}
+        PhoneRinger.stop(this)
         ui.phoneRinging = false
+    }
+
+    // Enable/disable the background Find link. Enabling requests the notification
+    // permission (Android 13+) so the ring can post; the service itself starts on
+    // the next onPause hand-off (and immediately here so it takes effect at once).
+    private fun setFindBackground(on: Boolean) {
+        if (on && Prefs.watchAddress(this) == null) {
+            ui.status = "Connect to the watch once first, then enable background Find"
+            ui.findBackgroundOn = false
+            return
+        }
+        Prefs.setFindBackgroundEnabled(this, on)
+        ui.findBackgroundOn = on
+        if (on) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            ui.status = "Background Find on - your phone can ring with the app closed"
+        } else {
+            FindService.stop(this)
+            ui.status = "Background Find off"
+        }
     }
 
     // ---- Health Connect ------------------------------------------------------
@@ -317,6 +318,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // App is visible: the in-app link owns Find, so stop the background one.
+        FindService.stop(this)
+        ui.findBackgroundOn = Prefs.findBackgroundEnabled(this)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Leaving the foreground: hand off to the background link if enabled, so
+        // the watch can still ring the phone. Guarded - some OEMs restrict
+        // starting a foreground service at this point.
+        if (Prefs.findBackgroundEnabled(this) && Prefs.watchAddress(this) != null) {
+            try { FindService.start(this) } catch (_: Exception) {}
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         stopPhoneRing()
@@ -337,6 +355,7 @@ class UiState {
     var hasWatchAddr by mutableStateOf(false)
     // Find
     var phoneRinging by mutableStateOf(false)
+    var findBackgroundOn by mutableStateOf(false)
 }
 
 @Composable
@@ -352,6 +371,7 @@ private fun DashboardScreen(
     onSetInterval: (Int) -> Unit,
     onRingWatch: () -> Unit,
     onStopRing: () -> Unit,
+    onToggleFindBackground: (Boolean) -> Unit,
 ) {
     val scroll = rememberScrollState()
     Column(
@@ -462,6 +482,22 @@ private fun DashboardScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = DotRed),
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     ) { Text("Stop ringing") }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text("Ring even when app is closed", style = MaterialTheme.typography.bodyMedium)
+                    Switch(checked = ui.findBackgroundOn, onCheckedChange = onToggleFindBackground)
+                }
+                if (ui.findBackgroundOn) {
+                    Text(
+                        "Keeps a background link (a persistent notification) so the watch " +
+                            "can ring this phone at full volume with the app closed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DotGrey,
+                    )
                 }
             }
         }
