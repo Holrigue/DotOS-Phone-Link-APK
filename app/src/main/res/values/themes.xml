@@ -1,3 +1,7 @@
 <resources>
-    <style name="Theme.ArgdosDashboard" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.ArgdosDashboard" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/dot_black</item>
+        <item name="android:statusBarColor">@color/dot_black</item>
+        <item name="android:navigationBarColor">@color/dot_black</item>
+    </style>
 </resources>

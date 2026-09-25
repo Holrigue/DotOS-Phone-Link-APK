@@ -9,7 +9,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +19,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -102,7 +108,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
+            DotTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     DashboardScreen(
                         ui = ui,
@@ -254,8 +260,25 @@ private fun DashboardScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("ARGD-OS Dashboard", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Status: ${ui.status}", style = MaterialTheme.typography.bodyMedium)
+        // DotOS wordmark: a red dot + "DotOS", with the app role as a spaced-out
+        // grey caption underneath — the watch's charter, on the phone.
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(DotRed),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "DotOS",
+                style = MaterialTheme.typography.headlineSmall,
+                color = DotWhite,
+            )
+        }
+        Text("HEALTH DASHBOARD", style = DotCaption, color = DotGrey)
+        Spacer(Modifier.height(4.dp))
+        Text("Status: ${ui.status}", style = MaterialTheme.typography.bodyMedium, color = DotGrey)
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onScan) { Text("Scan") }
