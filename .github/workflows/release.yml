@@ -7,6 +7,11 @@ on:
   push:
     tags:
       - "v*"
+  # Also fires when a release is published from the GitHub web UI (Draft a new
+  # release -> create tag -> Publish). The build then attaches the APK to that
+  # same release, so no terminal / tag push is needed.
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
