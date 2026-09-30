@@ -4,7 +4,10 @@ import android.Manifest
 import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -109,6 +112,8 @@ class MainActivity : ComponentActivity() {
         ui.intervalMin = Prefs.intervalMinutes(this)
         ui.hasWatchAddr = Prefs.watchAddress(this) != null
         ui.findBackgroundOn = Prefs.findBackgroundEnabled(this)
+        ui.notifRelayOn = Prefs.notifRelayEnabled(this)
+        ui.notifAccessGranted = isNotifAccessGranted()
         ble.listener = object : BleClient.Listener {
             override fun onScanResult(devices: List<BleClient.Entry>) {
                 ui.devices.clear(); ui.devices.addAll(devices)
@@ -142,6 +147,8 @@ class MainActivity : ComponentActivity() {
                         onRingWatch = { ringWatch() },
                         onStopRing = { stopPhoneRing() },
                         onToggleFindBackground = { setFindBackground(it) },
+                        onToggleNotifRelay = { setNotifRelay(it) },
+                        onOpenNotifAccess = { openNotifAccessSettings() },
                     )
                 }
             }
@@ -277,6 +284,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---- Notification relay --------------------------------------------------
+    // Whether the user has granted this app notification access (required for the
+    // NotificationListenerService to see other apps' notifications).
+    private fun isNotifAccessGranted(): Boolean {
+        val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: return false
+        val me = ComponentName(this, NotificationRelayService::class.java)
+        return enabled.split(":").any {
+            val c = ComponentName.unflattenFromString(it)
+            c != null && c.packageName == me.packageName
+        }
+    }
+
+    private fun openNotifAccessSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            ui.status = "Couldn't open notification-access settings"
+        }
+    }
+
+    private fun setNotifRelay(on: Boolean) {
+        if (on && Prefs.watchAddress(this) == null) {
+            ui.status = "Connect to the watch once first, then enable notifications"
+            ui.notifRelayOn = false
+            return
+        }
+        Prefs.setNotifRelayEnabled(this, on)
+        ui.notifRelayOn = on
+        if (on) {
+            if (!isNotifAccessGranted()) {
+                ui.status = "Grant notification access so the watch gets your alerts"
+                openNotifAccessSettings()
+            } else {
+                ui.status = "Notifications will now show on the watch"
+            }
+        } else {
+            ui.status = "Notification relay off"
+        }
+        ui.notifAccessGranted = isNotifAccessGranted()
+    }
+
     // ---- Health Connect ------------------------------------------------------
     private fun startHealthConnectSync() {
         if (!ui.connected) {
@@ -323,6 +372,9 @@ class MainActivity : ComponentActivity() {
         // App is visible: the in-app link owns Find, so stop the background one.
         FindService.stop(this)
         ui.findBackgroundOn = Prefs.findBackgroundEnabled(this)
+        // Returning from the system notification-access screen: refresh the state.
+        ui.notifAccessGranted = isNotifAccessGranted()
+        ui.notifRelayOn = Prefs.notifRelayEnabled(this)
     }
 
     override fun onPause() {
@@ -356,6 +408,9 @@ class UiState {
     // Find
     var phoneRinging by mutableStateOf(false)
     var findBackgroundOn by mutableStateOf(false)
+    // Notifications relay
+    var notifRelayOn by mutableStateOf(false)
+    var notifAccessGranted by mutableStateOf(false)
 }
 
 @Composable
@@ -372,6 +427,8 @@ private fun DashboardScreen(
     onRingWatch: () -> Unit,
     onStopRing: () -> Unit,
     onToggleFindBackground: (Boolean) -> Unit,
+    onToggleNotifRelay: (Boolean) -> Unit,
+    onOpenNotifAccess: () -> Unit,
 ) {
     val scroll = rememberScrollState()
     Column(
@@ -495,6 +552,51 @@ private fun DashboardScreen(
                     Text(
                         "Keeps a background link (a persistent notification) so the watch " +
                             "can ring this phone at full volume with the app closed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DotGrey,
+                    )
+                }
+            }
+        }
+
+        Divider()
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text("Phone notifications on watch", style = MaterialTheme.typography.titleMedium)
+                    Switch(checked = ui.notifRelayOn, onCheckedChange = onToggleNotifRelay)
+                }
+                Text(
+                    "Forwards your phone's notifications (calls, messages, apps) to " +
+                        "the watch as they arrive. Needs notification access, granted once.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DotGrey,
+                )
+                if (!ui.hasWatchAddr) {
+                    Text(
+                        "No watch paired yet - Scan and connect once to enable this.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (ui.notifRelayOn && !ui.notifAccessGranted) {
+                    Text(
+                        "Notification access not granted yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Button(
+                        onClick = onOpenNotifAccess,
+                        colors = ButtonDefaults.buttonColors(containerColor = DotRed),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    ) { Text("Grant notification access") }
+                } else if (ui.notifRelayOn && ui.notifAccessGranted) {
+                    Text(
+                        "Access granted - notifications are being forwarded.",
                         style = MaterialTheme.typography.bodySmall,
                         color = DotGrey,
                     )

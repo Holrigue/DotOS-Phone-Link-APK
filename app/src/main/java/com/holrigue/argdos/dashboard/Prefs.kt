@@ -13,6 +13,7 @@ object Prefs {
     private const val K_AUTO = "auto_sync"
     private const val K_INTERVAL = "interval_min"
     private const val K_FIND_BG = "find_background"
+    private const val K_NOTIF_RELAY = "notif_relay"
 
     const val DEFAULT_INTERVAL_MIN = 15
     const val MIN_INTERVAL_MIN = 15   // WorkManager's floor for periodic work
@@ -35,4 +36,11 @@ object Prefs {
     fun findBackgroundEnabled(c: Context): Boolean = sp(c).getBoolean(K_FIND_BG, false)
     fun setFindBackgroundEnabled(c: Context, on: Boolean) =
         sp(c).edit().putBoolean(K_FIND_BG, on).apply()
+
+    // "Forward phone notifications to the watch": the NotificationListenerService
+    // pushes each posted notification to the watch's New Alert characteristic.
+    // Also requires the user to grant notification access in system settings.
+    fun notifRelayEnabled(c: Context): Boolean = sp(c).getBoolean(K_NOTIF_RELAY, false)
+    fun setNotifRelayEnabled(c: Context, on: Boolean) =
+        sp(c).edit().putBoolean(K_NOTIF_RELAY, on).apply()
 }
