@@ -57,11 +57,50 @@
             </intent-filter>
         </activity>
 
+        <!-- Share/open target for .gpx routes (e.g. from Gaia GPS): streams the
+             route to the watch's /gpx over BLE. -->
+        <activity
+            android:name=".GpxShareActivity"
+            android:exported="true"
+            android:label="Send route to watch"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.ArgdosDashboard">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/gpx+xml" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="text/xml" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/gpx+xml" />
+            </intent-filter>
+        </activity>
+
         <!-- Background Find link. connectedDevice type: it holds a BLE link. -->
         <service
             android:name=".FindService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Notification relay: reads posted phone notifications and pushes each
+             to the watch's New Alert characteristic over its own BLE link. The
+             OS binds it only after the user grants notification access. -->
+        <service
+            android:name=".NotificationRelayService"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- Re-arm the Find link on boot. -->
         <receiver
