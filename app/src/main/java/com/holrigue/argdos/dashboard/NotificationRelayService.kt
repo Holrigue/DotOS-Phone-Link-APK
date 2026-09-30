@@ -119,7 +119,7 @@ class NotificationRelayService : NotificationListenerService() {
             Notification.CATEGORY_MESSAGE -> NotifPacket.CAT_SMS
             Notification.CATEGORY_SOCIAL -> NotifPacket.CAT_IM
             Notification.CATEGORY_EVENT, Notification.CATEGORY_REMINDER -> NotifPacket.CAT_SCHEDULE
-            Notification.CATEGORY_NEWS, Notification.CATEGORY_PROMO -> NotifPacket.CAT_NEWS
+            Notification.CATEGORY_PROMO -> NotifPacket.CAT_NEWS
             else -> NotifPacket.CAT_SIMPLE
         }
     }

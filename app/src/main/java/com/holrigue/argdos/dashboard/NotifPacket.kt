@@ -44,9 +44,9 @@ object NotifPacket {
 
         val out = ArrayList<Byte>(titleBytes.size + bodyBytes.size + 3)
         out.add((category and 0xFF).toByte())
-        out.add(1)                       // count = 1 new alert
+        out.add(1.toByte())              // count = 1 new alert
         out.addAll(titleBytes.toList())
-        out.add(0x00)                    // title/body separator
+        out.add(0.toByte())              // title/body separator
         out.addAll(bodyBytes.toList())
         return out.toByteArray()
     }
