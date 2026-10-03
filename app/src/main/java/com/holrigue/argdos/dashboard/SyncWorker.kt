@@ -47,6 +47,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         )
 
         val ok = BlePush.push(ctx, address, packet)
+        if (ok) Prefs.setLastSync(ctx, System.currentTimeMillis(), snap.detail)
         // Retry (with WorkManager backoff) if the watch was unreachable this round;
         // the next periodic run will try again regardless.
         return if (ok) Result.success() else Result.retry()

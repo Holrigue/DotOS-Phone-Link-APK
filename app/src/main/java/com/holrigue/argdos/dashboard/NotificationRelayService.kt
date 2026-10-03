@@ -96,6 +96,8 @@ class NotificationRelayService : NotificationListenerService() {
         // Never relay our own notifications (the Find link / ring), or the OS
         // would echo them back to the watch.
         if (sbn.packageName == packageName) return false
+        // Apps the user muted in "Choose apps" never reach the watch.
+        if (sbn.packageName in Prefs.mutedApps(this)) return false
         val n = sbn.notification ?: return false
 
         // Skip ongoing/foreground-service chrome (music transport bars, "app is

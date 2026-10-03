@@ -1,38 +1,38 @@
 # ARGD-OS Dashboard (Android companion)
 
-Companion app for the ARGUS-Design-OS watch (LILYGO T-Watch Ultra). Its job is
-to relay the wearer's health metrics from Gadgetbridge to the watch over BLE,
-and later to act as a small phone-side control panel.
+Companion app for the DotOS watch (LILYGO T-Watch Ultra). It links the phone and
+the watch over BLE: health metrics, notifications, Find, and GPX routes.
 
-## Status
+## What it does
 
-**V1.0: manual test harness.** Scan for the watch, connect, and push hand-set
-health values so the whole app -> watch BLE path can be validated. This is also
-how the "two centrals" question is tested: try sending while Gadgetbridge is
-connected to the watch - if the write succeeds, the watch accepts a second
-central.
+One screen, one card per feature:
 
-**V1.1: Health Connect.** Reads the Amazfit's metrics from Health Connect (where
-Gadgetbridge publishes them) and sends them to the watch:
+- **Watch** - scan and connect (or reconnect to the saved watch with no scan).
+- **Health** - reads steps, heart rate (high / low over the last 30 min) and a
+  derived sleep score from Health Connect and sends them to the watch. Shows
+  when the last sync happened and what it carried. **Auto-sync** does it in the
+  background on a schedule (15 / 30 / 60 min; 15 is WorkManager's floor).
+- **Notifications** - forwards your phone's notifications to the watch. **Choose
+  apps** lets you mute the noisy ones so they never reach the wrist.
+- **Find** - ring the watch from the phone, or let the watch ring the phone
+  (even with the app closed).
+- **Routes** - send a `.gpx` route to the watch, from the in-app picker or by
+  sharing a file from any app (for example Gaia GPS) to this one.
 
-- **Steps** (today's total) and **heart rate** (latest sample) - read directly.
-- **Sleep score** - Health Connect has no score, so one is derived from the last
-  sleep session's duration and its deep/REM share (see `HealthConnectSource`).
-- **Stress** - left out; Health Connect has no stress type.
+Stress is left out: Health Connect has no stress type, and a sleep *score* is
+derived from the last sleep session's duration and its deep/REM share (see
+`HealthConnectSource`).
 
-**V1.2: background auto-sync.** A toggle enables a periodic background job
-(WorkManager) that reads Health Connect and pushes to the watch on its own -
-no need to open the app each time.
+### Health sync details
 
-- It reconnects to the watch by the address saved on your first manual connect
-  (so **connect once** before enabling), by direct address, with no BLE scan.
-- Interval is selectable (15 / 30 / 60 min; 15 is WorkManager's floor).
+- Auto-sync reconnects to the watch by the address saved on your first manual
+  connect (so **connect once** before enabling), by direct address, with no BLE
+  scan.
 - On Android 14+ it also requests **background** Health Connect access
   (`READ_HEALTH_DATA_IN_BACKGROUND`) so the worker can read while the app is
-  closed. The manual "Sync from Health Connect" button still works as before.
-
-The schedule survives reboots (WorkManager persists it). Runs may be deferred a
-little by Android's Doze batching, which is fine for health metrics.
+  closed. The manual **Sync now** button works as before.
+- The schedule survives reboots (WorkManager persists it). Runs may be deferred
+  a little by Android's Doze batching, which is fine for health metrics.
 
 ### Phone setup for Health Connect
 
