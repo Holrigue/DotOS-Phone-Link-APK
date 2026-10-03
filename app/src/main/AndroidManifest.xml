@@ -35,6 +35,11 @@
     <!-- Android 13: needed to see the Health Connect provider package. -->
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
+        <!-- Launchable apps, for the "Choose apps" notification filter. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application
@@ -82,6 +87,13 @@
                 <data android:mimeType="application/gpx+xml" />
             </intent-filter>
         </activity>
+
+        <!-- Which apps' notifications reach the watch. Opened from the dashboard. -->
+        <activity
+            android:name=".NotifAppsActivity"
+            android:exported="false"
+            android:label="Choose apps"
+            android:theme="@style/Theme.ArgdosDashboard" />
 
         <!-- Background Find link. connectedDevice type: it holds a BLE link. -->
         <service
