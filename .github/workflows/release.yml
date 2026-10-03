@@ -58,9 +58,12 @@ jobs:
             and Health Connect permissions on first launch.
 
             **What's in this build**
-            - DotOS charter: black / white / grey UI with a single red accent, dot-matrix launcher icon.
-            - Auto-retry on the first reconnect after a firmware re-flash (Android GATT error 133).
-            - Health Connect sync (sleep / steps / heart-rate high-low) — manual or background (default 15 min).
+            - One screen, one card per feature: Watch, Health, Notifications, Find, Routes.
+            - Health Connect sync (sleep / steps / heart-rate high-low), manual or in the background, with a readable "last sync".
+            - Phone notifications on the watch, with a **Choose apps** screen to mute the noisy ones.
+            - **Send a GPX route** to the watch from the app, or share a .gpx from any app (e.g. Gaia GPS).
+            - Find: ring the watch, or let the watch ring your phone, even with the app closed.
+            - The "Test values" sliders are gone: everything is real data.
 
             **Pairing:** on the watch open Notify and Enable a mode, then Scan in the app and tap
             **ARGUS Watch**. After a re-flash that still won't connect, forget the device in the
