@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.media.AudioManager
 import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -125,15 +126,26 @@ class NotificationRelayService : NotificationListenerService() {
         return !ongoing || n.fullScreenIntent != null
     }
 
-    // True while one of the apps in VOICE_SESSION_APPS has a live session (its ongoing /
-    // foreground-service notification is posted).
+    // True while one of the apps in VOICE_SESSION_APPS has a live voice session.
+    //
+    // Two signals, because ChatGPT's voice-session notification is not reliably
+    // flagged ongoing/foreground-service (when it is not, each spoken-turn update
+    // would otherwise be relayed as a fresh notification and the watch buzzed on
+    // every one — the "constant vibration, no way to stop" bug):
+    //  1. the app holds an ongoing / foreground-service notification, OR
+    //  2. the device audio mode is IN_COMMUNICATION (what a live two-way voice
+    //     session sets, like a call) while the app has ANY notification posted.
     private fun voiceSessionActive(pkg: String): Boolean {
         if (pkg !in VOICE_SESSION_APPS) return false
         val live = try { activeNotifications } catch (_: Exception) { null } ?: return false
-        return live.any {
-            it.packageName == pkg && (it.notification?.flags ?: 0) and
-                (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0
-        }
+        val posted = live.filter { it.packageName == pkg }
+        if (posted.isEmpty()) return false
+        if (posted.any { (it.notification?.flags ?: 0) and
+                (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0 }) return true
+        val mode = try {
+            (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.mode
+        } catch (_: Exception) { null }
+        return mode == AudioManager.MODE_IN_COMMUNICATION
     }
 
     private fun shouldRelay(sbn: StatusBarNotification): Boolean {
