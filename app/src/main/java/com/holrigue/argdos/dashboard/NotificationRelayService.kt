@@ -47,7 +47,17 @@ class NotificationRelayService : NotificationListenerService() {
         private const val REQ_MTU = 185
         private const val DEFAULT_MTU = 23
         private const val MAX_QUEUE = 16   // drop the oldest if notifications burst
+
+        // Apps with a live voice session: while their session notification is up, nothing
+        // from them reaches the watch (no vibration while talking to ChatGPT), and their
+        // session notification is never mistaken for a ringing call.
+        private val VOICE_SESSION_APPS = setOf("com.openai.chatgpt")
     }
+
+    // Keys of the call notifications we have relayed and that are still posted. A call
+    // notification is updated over and over while it rings; only the first post may ring
+    // the watch, and its removal is what tells the watch the call is over.
+    private val activeCalls = HashSet<String>()
 
     private var gatt: BluetoothGatt? = null
     private var newAlert: BluetoothGattCharacteristic? = null
@@ -77,6 +87,10 @@ class NotificationRelayService : NotificationListenerService() {
         if (!Prefs.notifRelayEnabled(this)) return
         if (!shouldRelay(sbn)) return
 
+        // A ringing call is posted once and then updated; only the first post rings.
+        val isCall = isRingingCall(sbn)
+        if (isCall && !synchronized(lock) { activeCalls.add(sbn.key) }) return
+
         val n = sbn.notification ?: return
         val extras = n.extras ?: return
         val title = (extras.getCharSequence(Notification.EXTRA_TITLE) ?: "").toString().trim()
@@ -91,14 +105,50 @@ class NotificationRelayService : NotificationListenerService() {
         enqueue(packet)
     }
 
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (!Prefs.notifRelayEnabled(this)) return
+        // The phone took a relayed call down: answered here, rejected, or answered on
+        // another device (Teams on a PC). Tell the watch so it stops ringing.
+        val wasCall = synchronized(lock) { activeCalls.remove(sbn.key) }
+        if (wasCall) enqueue(NotifPacket.buildCallEnd())
+    }
+
     // ---- Filtering -----------------------------------------------------------
+    // A call that is ringing now. Android posts the incoming-call notification with the
+    // call category and, for the dialer and Teams, a full-screen intent; the in-call
+    // notification that replaces it is ongoing and has none, so it is not a ring.
+    private fun isRingingCall(sbn: StatusBarNotification): Boolean {
+        val n = sbn.notification ?: return false
+        if (n.category != Notification.CATEGORY_CALL) return false
+        if (sbn.packageName in VOICE_SESSION_APPS) return false
+        val ongoing = n.flags and Notification.FLAG_ONGOING_EVENT != 0
+        return !ongoing || n.fullScreenIntent != null
+    }
+
+    // True while one of the apps in VOICE_SESSION_APPS has a live session (its ongoing /
+    // foreground-service notification is posted).
+    private fun voiceSessionActive(pkg: String): Boolean {
+        if (pkg !in VOICE_SESSION_APPS) return false
+        val live = try { activeNotifications } catch (_: Exception) { null } ?: return false
+        return live.any {
+            it.packageName == pkg && (it.notification?.flags ?: 0) and
+                (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0
+        }
+    }
+
     private fun shouldRelay(sbn: StatusBarNotification): Boolean {
         // Never relay our own notifications (the Find link / ring), or the OS
         // would echo them back to the watch.
         if (sbn.packageName == packageName) return false
         // Apps the user muted in "Choose apps" never reach the watch.
         if (sbn.packageName in Prefs.mutedApps(this)) return false
+        // A live ChatGPT voice session: no vibration at all while the user is talking.
+        if (voiceSessionActive(sbn.packageName)) return false
         val n = sbn.notification ?: return false
+
+        // A ringing call may be ongoing / not clearable (full-screen incoming-call UI):
+        // it is the one case the chrome filter below must let through.
+        if (isRingingCall(sbn)) return true
 
         // Skip ongoing/foreground-service chrome (music transport bars, "app is
         // running", downloads) and group summaries (the children carry the text).

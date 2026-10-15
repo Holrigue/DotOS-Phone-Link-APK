@@ -27,6 +27,14 @@ object NotifPacket {
     const val CAT_IM = 9
 
     /**
+     * "This call is over" for the watch: an incoming-call alert with a zero count. The
+     * firmware stops the ring and drops the call banner. Sent when a call notification
+     * is removed (answered here, rejected, or answered on another device such as Teams
+     * on a PC, which makes the phone take the notification down).
+     */
+    fun buildCallEnd(): ByteArray = byteArrayOf(CAT_CALL.toByte(), 0.toByte())
+
+    /**
      * @param category one of the CAT_* values
      * @param title    notification title (may be empty)
      * @param body     notification text (may be empty)
