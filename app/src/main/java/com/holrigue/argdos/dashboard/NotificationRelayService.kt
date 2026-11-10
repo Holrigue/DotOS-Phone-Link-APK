@@ -64,8 +64,21 @@ class NotificationRelayService : NotificationListenerService() {
             "com.facebook.katana",               // Facebook app (calls)
             "com.microsoft.teams",               // Microsoft Teams
             "com.google.android.apps.tachyon",   // Google Meet (formerly Duo)
-            "com.google.android.apps.meetings"   // Google Meet
+            "com.google.android.apps.meetings",  // Google Meet
+            "com.whatsapp",                      // WhatsApp
+            "com.whatsapp.w4b",                  // WhatsApp Business
+            "org.thoughtcrime.securesms",        // Signal
+            "org.telegram.messenger",            // Telegram
+            "com.discord",                       // Discord
+            "us.zoom.videomeetings",             // Zoom
+            "com.skype.raider",                  // Skype
+            "com.viber.voip"                     // Viber
         )
+
+        // A link that dropped and has not come back after this long is rebuilt on
+        // the next notification rather than trusted to autoConnect forever (which
+        // can stall silently, leaving every later notification dropped).
+        private const val STALE_LINK_MS = 2 * 60 * 1000L
     }
 
     // Keys of the call notifications we have relayed and that are still posted. A call
@@ -78,6 +91,9 @@ class NotificationRelayService : NotificationListenerService() {
     private var mtu = DEFAULT_MTU
     private var ready = false
     private var writeInFlight = false
+    // SystemClock.elapsedRealtime() when the link last became not-ready (0 = ready
+    // or never connected). Guarded by `lock`.
+    private var notReadySince = 0L
     private val queue = ArrayDeque<ByteArray>()
     // GATT callbacks and onNotificationPosted arrive on different threads; this
     // guards the queue + write flags shared between them.
@@ -222,6 +238,7 @@ class NotificationRelayService : NotificationListenerService() {
         val device = try { adapter.getRemoteDevice(addr) } catch (e: Exception) { return }
         ready = false
         mtu = DEFAULT_MTU
+        synchronized(lock) { notReadySince = android.os.SystemClock.elapsedRealtime() }
         // autoConnect = true: Android reconnects transparently when back in range.
         gatt = device.connectGatt(this, true, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
     }
@@ -232,12 +249,22 @@ class NotificationRelayService : NotificationListenerService() {
             writeInFlight = false
             newAlert = null
             queue.clear()
+            notReadySince = 0L
         }
         try { gatt?.disconnect(); gatt?.close() } catch (_: Exception) {}
         gatt = null
     }
 
     private fun enqueue(packet: ByteArray) {
+        // Rebuild a link that has been down too long (see STALE_LINK_MS). After
+        // closeLink() there is no GATT object, so the code below treats this as a
+        // first connect: this packet is queued and delivered once the watch answers.
+        val stale = synchronized(lock) {
+            gatt != null && !ready && notReadySince != 0L &&
+                android.os.SystemClock.elapsedRealtime() - notReadySince > STALE_LINK_MS
+        }
+        if (stale) closeLink()
+
         synchronized(lock) {
             // While a previously-established link is down (the watch is out of range or
             // unlinked and autoConnect is waiting to re-establish), do not stockpile
@@ -297,6 +324,7 @@ class NotificationRelayService : NotificationListenerService() {
                     writeInFlight = false
                     newAlert = null
                     queue.clear()
+                    if (notReadySince == 0L) notReadySince = android.os.SystemClock.elapsedRealtime()
                 }
             }
         }
@@ -309,7 +337,7 @@ class NotificationRelayService : NotificationListenerService() {
             // Grow the MTU before writing; onMtuChanged flips us ready + flushes.
             if (!g.requestMtu(REQ_MTU)) {
                 // Some stacks refuse the request; proceed at the default MTU.
-                synchronized(lock) { mtu = DEFAULT_MTU; ready = true }
+                synchronized(lock) { mtu = DEFAULT_MTU; ready = true; notReadySince = 0L }
                 flush()
             }
         }
@@ -318,6 +346,7 @@ class NotificationRelayService : NotificationListenerService() {
             synchronized(lock) {
                 mtu = if (status == BluetoothGatt.GATT_SUCCESS && newMtu >= DEFAULT_MTU) newMtu else DEFAULT_MTU
                 ready = true
+                notReadySince = 0L
             }
             flush()
         }
