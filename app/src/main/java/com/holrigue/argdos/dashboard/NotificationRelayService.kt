@@ -53,6 +53,19 @@ class NotificationRelayService : NotificationListenerService() {
         // from them reaches the watch (no vibration while talking to ChatGPT), and their
         // session notification is never mistaken for a ringing call.
         private val VOICE_SESSION_APPS = setOf("com.openai.chatgpt")
+
+        // Apps whose video/voice calls do not always set CATEGORY_CALL. For these, the
+        // incoming ring is the notification carrying a full-screen intent; we treat only
+        // those as a call so the watch shows the Mute / Hang-up banner (and a call-end on
+        // removal), while ordinary messages from the same app are left untouched.
+        private val VIDEO_CALL_APPS = setOf(
+            "com.facebook.orca",                 // Messenger
+            "com.facebook.mlite",                // Messenger Lite
+            "com.facebook.katana",               // Facebook app (calls)
+            "com.microsoft.teams",               // Microsoft Teams
+            "com.google.android.apps.tachyon",   // Google Meet (formerly Duo)
+            "com.google.android.apps.meetings"   // Google Meet
+        )
     }
 
     // Keys of the call notifications we have relayed and that are still posted. A call
@@ -120,10 +133,18 @@ class NotificationRelayService : NotificationListenerService() {
     // notification that replaces it is ongoing and has none, so it is not a ring.
     private fun isRingingCall(sbn: StatusBarNotification): Boolean {
         val n = sbn.notification ?: return false
-        if (n.category != Notification.CATEGORY_CALL) return false
         if (sbn.packageName in VOICE_SESSION_APPS) return false
         val ongoing = n.flags and Notification.FLAG_ONGOING_EVENT != 0
-        return !ongoing || n.fullScreenIntent != null
+        if (n.category == Notification.CATEGORY_CALL) {
+            // The dialer and CallStyle apps: the ring is the non-ongoing post, or the
+            // ongoing one that raises the full-screen incoming-call UI.
+            return !ongoing || n.fullScreenIntent != null
+        }
+        // Messenger / Teams / Meet video calls often omit CATEGORY_CALL. Their incoming
+        // ring is the notification that carries a full-screen intent; treat only that
+        // (from the known video-call apps) as a call, so ordinary messages from the same
+        // app are not mistaken for ringing calls.
+        return sbn.packageName in VIDEO_CALL_APPS && n.fullScreenIntent != null
     }
 
     // True while one of the apps in VOICE_SESSION_APPS has a live voice session.
@@ -176,6 +197,9 @@ class NotificationRelayService : NotificationListenerService() {
     // Map the Android notification category to an ANS CategoryID the firmware
     // understands. Falls back to a generic alert when the app sets none.
     private fun categoryFor(sbn: StatusBarNotification): Int {
+        // A ring the watch must show as a call banner, even when the app (Messenger,
+        // Teams, Meet) declared another category or none at all.
+        if (isRingingCall(sbn)) return NotifPacket.CAT_CALL
         return when (sbn.notification?.category) {
             Notification.CATEGORY_CALL -> NotifPacket.CAT_CALL
             Notification.CATEGORY_MISSED_CALL -> NotifPacket.CAT_MISSED_CALL
@@ -215,6 +239,14 @@ class NotificationRelayService : NotificationListenerService() {
 
     private fun enqueue(packet: ByteArray) {
         synchronized(lock) {
+            // While a previously-established link is down (the watch is out of range or
+            // unlinked and autoConnect is waiting to re-establish), do not stockpile
+            // notifications. The watch is not connected, the user has already seen them
+            // on the phone, and replaying the backlog on reconnect is exactly the "flood
+            // of already-seen missed notifications" we want gone. Only queue when there
+            // is no link yet (gatt == null: first connect, deliver what triggered it) or
+            // the link is ready.
+            if (gatt != null && !ready) return
             if (queue.size >= MAX_QUEUE) queue.pollFirst()   // shed the oldest on a burst
             queue.addLast(packet)
         }
@@ -256,12 +288,15 @@ class NotificationRelayService : NotificationListenerService() {
                 try { g.javaClass.getMethod("refresh").invoke(g) } catch (_: Exception) {}
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                // Keep the GATT object so autoConnect re-establishes the link; just
-                // mark it not-ready so we don't write into the void meanwhile.
+                // Keep the GATT object so autoConnect re-establishes the link; mark it
+                // not-ready so we don't write into the void, and drop any undelivered
+                // backlog so the watch is not flooded with stale notifications when it
+                // reconnects (only notifications posted after reconnection are sent).
                 synchronized(lock) {
                     ready = false
                     writeInFlight = false
                     newAlert = null
+                    queue.clear()
                 }
             }
         }
