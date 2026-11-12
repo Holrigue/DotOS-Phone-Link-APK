@@ -53,6 +53,32 @@ class NotificationRelayService : NotificationListenerService() {
         // from them reaches the watch (no vibration while talking to ChatGPT), and their
         // session notification is never mistaken for a ringing call.
         private val VOICE_SESSION_APPS = setOf("com.openai.chatgpt")
+
+        // Apps whose video/voice calls do not always set CATEGORY_CALL. For these, the
+        // incoming ring is the notification carrying a full-screen intent; we treat only
+        // those as a call so the watch shows the Mute / Hang-up banner (and a call-end on
+        // removal), while ordinary messages from the same app are left untouched.
+        private val VIDEO_CALL_APPS = setOf(
+            "com.facebook.orca",                 // Messenger
+            "com.facebook.mlite",                // Messenger Lite
+            "com.facebook.katana",               // Facebook app (calls)
+            "com.microsoft.teams",               // Microsoft Teams
+            "com.google.android.apps.tachyon",   // Google Meet (formerly Duo)
+            "com.google.android.apps.meetings",  // Google Meet
+            "com.whatsapp",                      // WhatsApp
+            "com.whatsapp.w4b",                  // WhatsApp Business
+            "org.thoughtcrime.securesms",        // Signal
+            "org.telegram.messenger",            // Telegram
+            "com.discord",                       // Discord
+            "us.zoom.videomeetings",             // Zoom
+            "com.skype.raider",                  // Skype
+            "com.viber.voip"                     // Viber
+        )
+
+        // A link that dropped and has not come back after this long is rebuilt on
+        // the next notification rather than trusted to autoConnect forever (which
+        // can stall silently, leaving every later notification dropped).
+        private const val STALE_LINK_MS = 2 * 60 * 1000L
     }
 
     // Keys of the call notifications we have relayed and that are still posted. A call
@@ -65,6 +91,9 @@ class NotificationRelayService : NotificationListenerService() {
     private var mtu = DEFAULT_MTU
     private var ready = false
     private var writeInFlight = false
+    // SystemClock.elapsedRealtime() when the link last became not-ready (0 = ready
+    // or never connected). Guarded by `lock`.
+    private var notReadySince = 0L
     private val queue = ArrayDeque<ByteArray>()
     // GATT callbacks and onNotificationPosted arrive on different threads; this
     // guards the queue + write flags shared between them.
@@ -120,10 +149,18 @@ class NotificationRelayService : NotificationListenerService() {
     // notification that replaces it is ongoing and has none, so it is not a ring.
     private fun isRingingCall(sbn: StatusBarNotification): Boolean {
         val n = sbn.notification ?: return false
-        if (n.category != Notification.CATEGORY_CALL) return false
         if (sbn.packageName in VOICE_SESSION_APPS) return false
         val ongoing = n.flags and Notification.FLAG_ONGOING_EVENT != 0
-        return !ongoing || n.fullScreenIntent != null
+        if (n.category == Notification.CATEGORY_CALL) {
+            // The dialer and CallStyle apps: the ring is the non-ongoing post, or the
+            // ongoing one that raises the full-screen incoming-call UI.
+            return !ongoing || n.fullScreenIntent != null
+        }
+        // Messenger / Teams / Meet video calls often omit CATEGORY_CALL. Their incoming
+        // ring is the notification that carries a full-screen intent; treat only that
+        // (from the known video-call apps) as a call, so ordinary messages from the same
+        // app are not mistaken for ringing calls.
+        return sbn.packageName in VIDEO_CALL_APPS && n.fullScreenIntent != null
     }
 
     // True while one of the apps in VOICE_SESSION_APPS has a live voice session.
@@ -176,6 +213,9 @@ class NotificationRelayService : NotificationListenerService() {
     // Map the Android notification category to an ANS CategoryID the firmware
     // understands. Falls back to a generic alert when the app sets none.
     private fun categoryFor(sbn: StatusBarNotification): Int {
+        // A ring the watch must show as a call banner, even when the app (Messenger,
+        // Teams, Meet) declared another category or none at all.
+        if (isRingingCall(sbn)) return NotifPacket.CAT_CALL
         return when (sbn.notification?.category) {
             Notification.CATEGORY_CALL -> NotifPacket.CAT_CALL
             Notification.CATEGORY_MISSED_CALL -> NotifPacket.CAT_MISSED_CALL
@@ -198,6 +238,7 @@ class NotificationRelayService : NotificationListenerService() {
         val device = try { adapter.getRemoteDevice(addr) } catch (e: Exception) { return }
         ready = false
         mtu = DEFAULT_MTU
+        synchronized(lock) { notReadySince = android.os.SystemClock.elapsedRealtime() }
         // autoConnect = true: Android reconnects transparently when back in range.
         gatt = device.connectGatt(this, true, cb, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
     }
@@ -208,13 +249,31 @@ class NotificationRelayService : NotificationListenerService() {
             writeInFlight = false
             newAlert = null
             queue.clear()
+            notReadySince = 0L
         }
         try { gatt?.disconnect(); gatt?.close() } catch (_: Exception) {}
         gatt = null
     }
 
     private fun enqueue(packet: ByteArray) {
+        // Rebuild a link that has been down too long (see STALE_LINK_MS). After
+        // closeLink() there is no GATT object, so the code below treats this as a
+        // first connect: this packet is queued and delivered once the watch answers.
+        val stale = synchronized(lock) {
+            gatt != null && !ready && notReadySince != 0L &&
+                android.os.SystemClock.elapsedRealtime() - notReadySince > STALE_LINK_MS
+        }
+        if (stale) closeLink()
+
         synchronized(lock) {
+            // While a previously-established link is down (the watch is out of range or
+            // unlinked and autoConnect is waiting to re-establish), do not stockpile
+            // notifications. The watch is not connected, the user has already seen them
+            // on the phone, and replaying the backlog on reconnect is exactly the "flood
+            // of already-seen missed notifications" we want gone. Only queue when there
+            // is no link yet (gatt == null: first connect, deliver what triggered it) or
+            // the link is ready.
+            if (gatt != null && !ready) return
             if (queue.size >= MAX_QUEUE) queue.pollFirst()   // shed the oldest on a burst
             queue.addLast(packet)
         }
@@ -256,12 +315,16 @@ class NotificationRelayService : NotificationListenerService() {
                 try { g.javaClass.getMethod("refresh").invoke(g) } catch (_: Exception) {}
                 g.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                // Keep the GATT object so autoConnect re-establishes the link; just
-                // mark it not-ready so we don't write into the void meanwhile.
+                // Keep the GATT object so autoConnect re-establishes the link; mark it
+                // not-ready so we don't write into the void, and drop any undelivered
+                // backlog so the watch is not flooded with stale notifications when it
+                // reconnects (only notifications posted after reconnection are sent).
                 synchronized(lock) {
                     ready = false
                     writeInFlight = false
                     newAlert = null
+                    queue.clear()
+                    if (notReadySince == 0L) notReadySince = android.os.SystemClock.elapsedRealtime()
                 }
             }
         }
@@ -274,7 +337,7 @@ class NotificationRelayService : NotificationListenerService() {
             // Grow the MTU before writing; onMtuChanged flips us ready + flushes.
             if (!g.requestMtu(REQ_MTU)) {
                 // Some stacks refuse the request; proceed at the default MTU.
-                synchronized(lock) { mtu = DEFAULT_MTU; ready = true }
+                synchronized(lock) { mtu = DEFAULT_MTU; ready = true; notReadySince = 0L }
                 flush()
             }
         }
@@ -283,6 +346,7 @@ class NotificationRelayService : NotificationListenerService() {
             synchronized(lock) {
                 mtu = if (status == BluetoothGatt.GATT_SUCCESS && newMtu >= DEFAULT_MTU) newMtu else DEFAULT_MTU
                 ready = true
+                notReadySince = 0L
             }
             flush()
         }

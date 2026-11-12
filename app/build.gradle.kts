@@ -11,8 +11,8 @@ android {
         applicationId = "com.holrigue.argdos.dashboard"
         minSdk = 26          // Android 8.0
         targetSdk = 34
-        versionCode = 4
-        versionName = "2.0.0"
+        versionCode = 5
+        versionName = "3.0.0"
     }
 
     buildTypes {
